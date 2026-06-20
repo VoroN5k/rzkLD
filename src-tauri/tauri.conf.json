@@ -1,0 +1,38 @@
+{
+  "build": {
+    "distDir": "../dist",
+    "devPath": "../dist",
+    "withGlobalTauri": true
+  },
+  "package": {
+    "productName": "rzkLD",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "shell": {
+        "open": false
+      }
+    },
+    "bundle": {
+      "active": true,
+      "identifier": "com.example.hlsdownloader",
+      "icon": [
+        "icons/icon.png",
+        "icons/icon.ico"
+      ]
+    },
+    "windows": [
+      {
+        "title": "rzkLD",
+        "width": 520,
+        "height": 420,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+}

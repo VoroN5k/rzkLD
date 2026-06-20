@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8" />
+<title>HLS Downloader</title>
+<style>
+  body {
+    font-family: -apple-system, system-ui, sans-serif;
+    background: #1e1e2e;
+    color: #e0e0e0;
+    padding: 24px;
+    margin: 0;
+  }
+  h1 { font-size: 18px; margin-bottom: 16px; }
+  label { font-size: 13px; opacity: 0.8; display: block; margin-top: 12px; margin-bottom: 4px; }
+  input {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid #444;
+    background: #2a2a3c;
+    color: #fff;
+    box-sizing: border-box;
+    font-size: 13px;
+  }
+  button {
+    margin-top: 18px;
+    width: 100%;
+    padding: 10px;
+    border-radius: 6px;
+    border: none;
+    background: #6c5ce7;
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .progress-wrap {
+    margin-top: 16px;
+    background: #2a2a3c;
+    border-radius: 6px;
+    overflow: hidden;
+    height: 18px;
+  }
+  .progress-bar {
+    height: 100%;
+    width: 0%;
+    background: #6c5ce7;
+    transition: width 0.15s ease;
+  }
+  .status { margin-top: 10px; font-size: 12px; opacity: 0.85; word-break: break-all; }
+</style>
+</head>
+<body>
+  <h1>HLS Downloader</h1>
+
+  <label for="url">URL плейлиста (.m3u8)</label>
+  <input id="url" type="text" placeholder="https://example.com/playlist.m3u8" />
+
+  <label for="out">Зберегти як</label>
+  <input id="out" type="text" value="output.ts" />
+
+  <button id="startBtn">Завантажити</button>
+
+  <div class="progress-wrap">
+    <div class="progress-bar" id="bar"></div>
+  </div>
+  <div class="status" id="status"></div>
+  <div class="status" id="ffmpegWarning" style="color: #ff7675; display: none;">
+    ⚠ ffmpeg не знайдено в PATH. Встанови його, інакше mp4-конвертація не спрацює
+    (Windows: winget install ffmpeg · macOS: brew install ffmpeg · Linux: sudo apt install ffmpeg)
+  </div>
+
+  <script>
+    const { invoke } = window.__TAURI__.tauri;
+    const { listen } = window.__TAURI__.event;
+
+    const startBtn = document.getElementById("startBtn");
+    const bar = document.getElementById("bar");
+    const status = document.getElementById("status");
+    const ffmpegWarning = document.getElementById("ffmpegWarning");
+
+    invoke("ffmpeg_available").then((ok) => {
+      if (!ok) ffmpegWarning.style.display = "block";
+    });
+
+    listen("progress", (event) => {
+      const { done, total } = event.payload;
+      const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+      bar.style.width = pct + "%";
+      status.textContent = `Сегменти: ${done}/${total} (${pct}%)`;
+    });
+
+    listen("status", (event) => {
+      status.textContent = event.payload;
+    });
+
+    startBtn.addEventListener("click", async () => {
+      const url = document.getElementById("url").value.trim();
+      const out = document.getElementById("out").value.trim() || "output.ts";
+
+      if (!url) {
+        status.textContent = "Встав URL плейлиста.";
+        return;
+      }
+
+      startBtn.disabled = true;
+      bar.style.width = "0%";
+      status.textContent = "Стартую...";
+
+      try {
+        const result = await invoke("download_stream", { url, out });
+        status.textContent = result;
+      } catch (e) {
+        status.textContent = "Помилка: " + e;
+      } finally {
+        startBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+# Rust build artefacts
+src-tauri/target/
+
+# Node (якщо колись з'явиться package.json)
+node_modules/
+
+# Готові бінарники/інсталятори (якщо збираєш локально, не для коміту)
+*.exe
+*.msi
+*.dmg
+*.AppImage
+*.deb
+
+# Скачані відео (результат роботи самого застосунку)
+*.ts
+*.mp4
+
+# OS-специфічне сміття
+.DS_Store
+Thumbs.db
