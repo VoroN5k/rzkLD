@@ -1,5 +1,5 @@
 [package]
-name = "hls_downloader_tauri"
+name = "rzkLD"
 version = "0.1.0"
 edition = "2021"
 
