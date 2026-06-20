@@ -48,17 +48,43 @@
     background: #6c5ce7;
     transition: width 0.15s ease;
   }
-  .status { margin-top: 10px; font-size: 12px; opacity: 0.85; word-break: break-all; }
+  .status { margin-top: 10px; font-size: 12px; opacity: 0.85; word-break: break-all; white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
 </style>
 </head>
 <body>
   <h1>HLS Downloader</h1>
 
+  <h3 style="margin: 0 0 4px; font-size: 14px; opacity: 0.9;">1. Знайти плейлист (опціонально)</h3>
+  <label for="playerUrl">URL сторінки плеєра</label>
+  <input id="playerUrl" type="text" placeholder="https://мій-сервер.com/player?video=123" />
+
+  <label for="buttonSelector">CSS-селектор кнопки play (не працює для кнопок всередині iframe)</label>
+  <input id="buttonSelector" type="text" placeholder="button.play-button" />
+
+  <label style="margin-top: 10px;">Скрол вниз перед скріншотом/кліком (пікселі, можна 0)</label>
+  <input id="scrollY" type="number" placeholder="0" value="400" />
+
+  <label>Або клік по координатах (працює навіть для iframe-плеєрів)</label>
+  <div style="display: flex; gap: 8px;">
+    <input id="clickX" type="number" placeholder="X" style="width: 50%;" value="484" />
+    <input id="clickY" type="number" placeholder="Y" style="width: 50%;" value="293" />
+  </div>
+
+  <button id="findBtn" style="background: #3a3a52;">🔍 Знайти m3u8</button>
+  <button id="screenshotBtn" style="background: #2d2d44; margin-top: 8px;">📷 Зробити скріншот для вимірювання координат</button>
+
+  <h3 style="margin: 18px 0 4px; font-size: 14px; opacity: 0.9;">2. Завантажити</h3>
   <label for="url">URL плейлиста (.m3u8)</label>
   <input id="url" type="text" placeholder="https://example.com/playlist.m3u8" />
 
   <label for="out">Зберегти як</label>
   <input id="out" type="text" value="output.ts" />
+
+  <label for="outDir">Папка збереження</label>
+  <div style="display: flex; gap: 8px;">
+    <input id="outDir" type="text" placeholder="(поточна папка застосунку)" style="flex: 1;" readonly />
+    <button id="pickFolderBtn" type="button" style="margin-top: 0; width: auto; padding: 8px 14px; background: #3a3a52;">📁</button>
+  </div>
 
   <button id="startBtn">Завантажити</button>
 
@@ -74,11 +100,26 @@
   <script>
     const { invoke } = window.__TAURI__.tauri;
     const { listen } = window.__TAURI__.event;
+    const { open } = window.__TAURI__.dialog;
 
     const startBtn = document.getElementById("startBtn");
+    const findBtn = document.getElementById("findBtn");
+    const screenshotBtn = document.getElementById("screenshotBtn");
+    const pickFolderBtn = document.getElementById("pickFolderBtn");
     const bar = document.getElementById("bar");
     const status = document.getElementById("status");
     const ffmpegWarning = document.getElementById("ffmpegWarning");
+
+    pickFolderBtn.addEventListener("click", async () => {
+      try {
+        const selected = await open({ directory: true, multiple: false });
+        if (selected) {
+          document.getElementById("outDir").value = selected;
+        }
+      } catch (e) {
+        status.textContent = "Помилка вибору папки: " + e;
+      }
+    });
 
     invoke("ffmpeg_available").then((ok) => {
       if (!ok) ffmpegWarning.style.display = "block";
@@ -95,9 +136,71 @@
       status.textContent = event.payload;
     });
 
+    screenshotBtn.addEventListener("click", async () => {
+      const playerUrl = document.getElementById("playerUrl").value.trim();
+      if (!playerUrl) {
+        status.textContent = "Встав URL сторінки плеєра.";
+        return;
+      }
+
+      screenshotBtn.disabled = true;
+      status.textContent = "Роблю скріншот...";
+
+      try {
+        const scrollYRaw = document.getElementById("scrollY").value.trim();
+        const scrollY = scrollYRaw === "" ? 0 : Number(scrollYRaw);
+        const outPath = await invoke("debug_screenshot", {
+          pageUrl: playerUrl,
+          outPath: "debug_screenshot.png",
+          scrollY: scrollY,
+        });
+        status.textContent = "Збережено: " + outPath + " — відкрий його і заміряй координати кнопки (наприклад у Paint/Preview, курсор у нижньому куті показує X/Y)";
+      } catch (e) {
+        status.textContent = "Помилка скріншота: " + e;
+      } finally {
+        screenshotBtn.disabled = false;
+      }
+    });
+
+    findBtn.addEventListener("click", async () => {
+      const playerUrl = document.getElementById("playerUrl").value.trim();
+      const buttonSelector = document.getElementById("buttonSelector").value.trim();
+      const xRaw = document.getElementById("clickX").value.trim();
+      const yRaw = document.getElementById("clickY").value.trim();
+      const clickX = xRaw === "" ? null : Number(xRaw);
+      const clickY = yRaw === "" ? null : Number(yRaw);
+
+      if (!playerUrl) {
+        status.textContent = "Встав URL сторінки плеєра.";
+        return;
+      }
+
+      findBtn.disabled = true;
+      status.textContent = "Шукаю m3u8...";
+
+      try {
+        const scrollYRaw = document.getElementById("scrollY").value.trim();
+        const scrollY = scrollYRaw === "" ? 0 : Number(scrollYRaw);
+        const found = await invoke("find_playlist_url", {
+          pageUrl: playerUrl,
+          buttonSelector: buttonSelector,
+          clickX: clickX,
+          clickY: clickY,
+          scrollY: scrollY,
+        });
+        document.getElementById("url").value = found;
+        status.textContent = "Знайдено і вставлено: " + found;
+      } catch (e) {
+        status.textContent = "Помилка пошуку: " + e;
+      } finally {
+        findBtn.disabled = false;
+      }
+    });
+
     startBtn.addEventListener("click", async () => {
       const url = document.getElementById("url").value.trim();
       const out = document.getElementById("out").value.trim() || "output.ts";
+      const outDir = document.getElementById("outDir").value.trim();
 
       if (!url) {
         status.textContent = "Встав URL плейлиста.";
@@ -109,7 +212,7 @@
       status.textContent = "Стартую...";
 
       try {
-        const result = await invoke("download_stream", { url, out });
+        const result = await invoke("download_stream", { url, out, outDir: outDir || null });
         status.textContent = result;
       } catch (e) {
         status.textContent = "Помилка: " + e;

@@ -4,9 +4,16 @@ use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::stream::{FuturesOrdered, StreamExt};
+use headless_chrome::browser::tab::point::Point;
+use headless_chrome::browser::tab::RequestPausedDecision;
+use headless_chrome::browser::transport::{SessionId, Transport};
+use headless_chrome::protocol::cdp::Page::CaptureScreenshotFormatOption;
+use headless_chrome::protocol::cdp::Fetch::events::RequestPausedEvent;
+use headless_chrome::{Browser, LaunchOptions};
 use reqwest::Client;
 use serde::Serialize;
 use tauri::Manager;
@@ -74,11 +81,155 @@ fn ffmpeg_available() -> bool {
     check_ffmpeg()
 }
 
+// Фіксований розмір вікна headless-браузера — однаковий для скріншота
+// і для реального кліку, інакше координати не збігатимуться
+const BROWSER_WINDOW_SIZE: (u32, u32) = (1280, 800);
+
+#[tauri::command]
+async fn debug_screenshot(
+    page_url: String,
+    out_path: String,
+    scroll_y: Option<i64>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let launch_options = LaunchOptions::default_builder()
+            .window_size(Some(BROWSER_WINDOW_SIZE))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let browser = Browser::new(launch_options).map_err(|e| e.to_string())?;
+        let tab = browser.new_tab().map_err(|e| e.to_string())?;
+
+        tab.navigate_to(&page_url).map_err(|e| e.to_string())?;
+        tab.wait_until_navigated().map_err(|e| e.to_string())?;
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        if let Some(y) = scroll_y {
+            if y != 0 {
+                let script = format!("window.scrollTo(0, {});", y);
+                tab.evaluate(&script, false).map_err(|e| e.to_string())?;
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+
+        let png_bytes = tab
+            .capture_screenshot(CaptureScreenshotFormatOption::Png, None, None, true)
+            .map_err(|e| e.to_string())?;
+
+        std::fs::write(&out_path, &png_bytes).map_err(|e| e.to_string())?;
+        Ok(out_path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn find_playlist_url(
+    window: tauri::Window,
+    page_url: String,
+    button_selector: String,
+    click_x: Option<f64>,
+    click_y: Option<f64>,
+    scroll_y: Option<i64>,
+) -> Result<String, String> {
+    let _ = window.emit("status", "Відкриваю сторінку плеєра...");
+
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let launch_options = LaunchOptions::default_builder()
+            .window_size(Some(BROWSER_WINDOW_SIZE))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let browser = Browser::new(launch_options).map_err(|e| e.to_string())?;
+        let tab = browser.new_tab().map_err(|e| e.to_string())?;
+
+        let found_urls: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let found_urls_clone = found_urls.clone();
+        let all_urls: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let all_urls_clone = all_urls.clone();
+
+        tab.enable_fetch(None, None).map_err(|e| e.to_string())?;
+        tab.enable_request_interception(Arc::new(
+            move |_transport: Arc<Transport>,
+                  _session_id: SessionId,
+                  intercepted: RequestPausedEvent| {
+                let req_url = &intercepted.params.request.url;
+                if req_url.contains(".m3u8") || req_url.contains(".mpd") {
+                    found_urls_clone.lock().unwrap().push(req_url.clone());
+                }
+                // Зберігаємо геть усе для діагностики, якщо основний пошук не спрацює
+                let mut all = all_urls_clone.lock().unwrap();
+                if all.len() < 60 {
+                    all.push(req_url.clone());
+                }
+                RequestPausedDecision::Continue(None)
+            },
+        ))
+        .map_err(|e| e.to_string())?;
+
+        tab.navigate_to(&page_url).map_err(|e| e.to_string())?;
+        tab.wait_until_navigated().map_err(|e| e.to_string())?;
+        std::thread::sleep(std::time::Duration::from_secs(1));
+
+        if let Some(y) = scroll_y {
+            if y != 0 {
+                let script = format!("window.scrollTo(0, {});", y);
+                tab.evaluate(&script, false).map_err(|e| e.to_string())?;
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+
+        if !button_selector.trim().is_empty() {
+            // Звичайний шлях: шукаємо кнопку в DOM (працює тільки
+            // для елементів у головному документі, не всередині iframe)
+            if let Ok(button) = tab.wait_for_element(&button_selector) {
+                let _ = button.click();
+            }
+        } else if let (Some(x), Some(y)) = (click_x, click_y) {
+            // Fallback для плеєрів усередині iframe: клік по координатах
+            // на екрані, незалежно від того, який документ там намальований
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            let _ = tab.click_point(Point { x, y });
+        }
+
+        std::thread::sleep(std::time::Duration::from_secs(6));
+
+        let urls = found_urls.lock().unwrap();
+        if let Some(found) = urls.first() {
+            return Ok(found.clone());
+        }
+
+        let all = all_urls.lock().unwrap();
+        if all.is_empty() {
+            Err("Жодного мережевого запиту взагалі не зафіксовано. Схоже, клік не потрапив на елемент — перевір координати ще раз.".to_string())
+        } else {
+            let sample: Vec<String> = all.iter().take(20).cloned().collect();
+            Err(format!(
+                "m3u8/mpd не знайдено серед {} запитів. Ось що реально побачив браузер:\n{}",
+                all.len(),
+                sample.join("\n")
+            ))
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    match &result {
+        Ok(found) => {
+            let _ = window.emit("status", format!("Знайдено: {}", found));
+        }
+        Err(e) => {
+            let _ = window.emit("status", format!("Помилка пошуку: {}", e));
+        }
+    }
+
+    result
+}
+
 #[tauri::command]
 async fn download_stream(
     window: tauri::Window,
     url: String,
     out: String,
+    out_dir: Option<String>,
 ) -> Result<String, String> {
     if !check_ffmpeg() {
         return Err(
@@ -168,7 +319,10 @@ async fn download_stream(
         }
     }
 
-    let out_path = PathBuf::from(&out);
+    let out_path = match out_dir {
+        Some(dir) if !dir.trim().is_empty() => PathBuf::from(dir).join(&out),
+        _ => PathBuf::from(&out),
+    };
     let mut out_file = File::create(&out_path).map_err(|e| e.to_string())?;
     for chunk in results {
         let data = chunk.ok_or("Відсутній сегмент")?;
@@ -203,7 +357,12 @@ async fn download_stream(
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![download_stream, ffmpeg_available])
+        .invoke_handler(tauri::generate_handler![
+            download_stream,
+            ffmpeg_available,
+            find_playlist_url,
+            debug_screenshot
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

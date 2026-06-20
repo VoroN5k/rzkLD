@@ -1,5 +1,5 @@
 [package]
-name = "rzkLD"
+name = "hls_downloader_tauri"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,7 +7,7 @@ edition = "2021"
 tauri-build = { version = "1", default-features = false , features = [] }
 
 [dependencies]
-tauri = { version = "1", default-features = false, features = ["wry"] }
+tauri = { version = "1", default-features = false, features = ["wry", "dialog-open"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -15,6 +15,7 @@ reqwest = { version = "0.11", default-features = false, features = ["stream", "r
 url = "=2.4.1"
 futures-util = "0.3"
 indexmap = "=2.2.6"
+headless_chrome = "1"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
