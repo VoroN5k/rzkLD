@@ -1,10 +1,10 @@
 [package]
-name = "rzkLD"
+name = "hls_downloader_tauri"
 version = "0.1.0"
 edition = "2021"
 
 [build-dependencies]
-tauri-build = { version = "1", default-features = false , features = [] }
+tauri-build = { version = "1", default-features = false }
 
 [dependencies]
 tauri = { version = "1", default-features = false, features = ["wry", "dialog-open"] }
